@@ -1,134 +1,153 @@
-1. Data Preparation
-The raw weekly data was preprocessed and engineered to prepare it for modeling.
+# MMM Random Forest Model + Plots
 
-Handling Seasonality and Trend:
+**Repository**: MMM Random Forest Model + Plots
 
-Although time-based features (year, month, quarter) were created to capture seasonality, they were ultimately excluded from the final model to create a simpler, more parsimonious model focused on direct business levers.
+A reproducible notebook and supporting code that fits a two-stage Marketing Mix Modeling (MMM) pipeline using Random Forests. The pipeline: (1) predict `google_spend` from social channels (mediator stage), and (2) model log(revenue) using the mediator plus marketing levers and controls. The repo includes plotting and diagnostic code (feature importances, predicted vs actual, partial dependence plots).
 
-A week_number feature was created to serve as a linear time trend, but was also excluded for the same reason. Trend effects are implicitly captured to some extent by features like followers_growth.
+---
 
-Handling Zero-Spend Periods:
+## Contents
 
-Many marketing spend channels have weeks with zero spend. Applying a standard logarithm (np.log) would result in negative infinity.
+* `notebook.ipynb` — Reproducible Jupyter notebook that runs the full pipeline (data preparation, stage 1 and stage 2 modeling, plots, diagnostics).
+* `README.md` — This file.
+* `requirements.txt` — Python package requirements for reproducibility.
+* `data/Assessment 2 - MMM Weekly.csv` — (Not included) Put your weekly CSV here.
+* `scripts/` — Helper scripts (optional): data cleaning, model training wrappers, plotting utilities.
 
-To handle this, a log-transform of the form np.log1p(x) (equivalent to log(x+1)) was applied to all spend variables and the target variable (revenue). This transformation gracefully handles zeros while also compressing the range of the variables and normalizing their distributions.
+---
 
-Feature Scaling and Transformations:
+## Quick start
 
-Scaling: StandardScaler was used on average_price and followers_growth to center them around zero with a standard deviation of one. This is crucial for models that are sensitive to feature magnitudes, and while Random Forest is not, it's good practice and aids in interpretability of effects like Partial Dependence.
+1. Clone the repo
 
-Categorical Features: The promotions variable was converted into a categorical type and then one-hot encoded using pd.get_dummies. This allows the model to treat each promotion type as a distinct binary feature.
+```bash
+git clone <repo-url>
+cd <repo-folder>
+```
 
-Feature Engineering: New features were created, such as followers_growth and scaled versions of email/SMS sends (emails_send_k, sms_send_k), to better capture marketing momentum and simplify coefficients.
+2. Create a Python environment and install requirements
 
-2. Modeling Approach
-A Random Forest Regressor was chosen for both stages of the model.
+```bash
+python -m venv .venv
+source .venv/bin/activate   # or .venv\Scripts\activate on Windows
+pip install -r requirements.txt
+```
 
-Why Random Forest?
+3. Place the dataset `Assessment 2 - MMM Weekly.csv` into the `data/` folder.
 
-Non-linearity: It can capture complex, non-linear relationships between marketing spend and revenue without requiring manual transformations (e.g., adstock or saturation effects).
+4. Run the notebook
 
-Interactions: It automatically handles interaction effects between features (e.g., the impact of a promotion might be higher when average price is also high).
+```bash
+jupyter lab   # or jupyter notebook, then open `notebook.ipynb`
+```
 
-Robustness: It is less sensitive to outliers compared to linear models.
+Or run the core script(s) from `scripts/` (if provided):
 
-Feature Importance: It provides a built-in mechanism to rank features by their predictive power, which is essential for deriving business insights.
+```bash
+python scripts/run_pipeline.py --data data/Assessment\ 2\ -\ MMM\ Weekly.csv
+```
 
-Hyperparameter Choices & Regularization:
+---
 
-The hyperparameters were chosen to regularize the model and prevent overfitting.
+## Requirements
 
-n_estimators=300: A sufficient number of trees to ensure stable predictions.
+Minimum tested with Python 3.9+. Key libraries:
 
-max_depth=6: Limits the depth of each tree, preventing it from fitting noise in the training data.
+* numpy
+* pandas
+* scikit-learn
+* matplotlib
+* seaborn
 
-min_samples_split=5 & min_samples_leaf=3: Requires a minimum number of data points to make a split or form a leaf, which smooths the model and reduces variance.
+A `requirements.txt` with pinned versions is included to lock the environment.
 
-max_features='sqrt': At each split, only a random subset of features is considered, which de-correlates the trees and improves generalization.
+---
 
-Validation Plan:
+## Notebook / Code overview
 
-A simple time-based 80/20 split was used for validation. The first 80% of the data was used for training and the final 20% for testing.
+The notebook follows these sections (mirror of the provided script):
 
-This approach is crucial for time-series data as it ensures the model is validated on "unseen" future data, simulating a real-world forecasting scenario.
+1. **Imports & global plotting settings** — numpy, pandas, sklearn, matplotlib, seaborn, PartialDependenceDisplay.
 
-3. Causal Framing
-The model is designed to address a key causal question: what is the impact of social media spend on revenue, considering that it also influences Google spend?
+2. **Load dataset** — read CSV and coerce `week` to `datetime`.
 
-Mediator Assumption:
+3. **Time features** — derive `week_number`, `year`, `month`, and `quarter`. These help capture seasonal/trend effects if included in models or diagnostics.
 
-We assume that Google spend acts as a mediator for other social media channels. The causal path is: Social Spend → Google Spend → Revenue.
+4. **Lag features** — `revenue_lag1`, `revenue_lag2` to provide short-term autoregressive signal. Rows with NA due to lagging are dropped.
 
-Ignoring this path would lead to double-counting the effect of social spend and misattributing its impact.
+5. **Log-transform spend & revenue** — all spend channels and revenue are `log1p` transformed to stabilize variance and handle zeros.
 
-Two-Stage Approach:
+6. **Categorical feature handling** — `promotions` encoded with one-hot dummies (drop-first to avoid multicollinearity).
 
-To handle this, we use a two-stage approach to "block" the back-door path.
+7. **Other features** — scale `emails_send` and `sms_send` (into thousands), create `followers_growth` and scale it.
 
-Stage 1 models the path Social Spend → Google Spend. The output, google_spend_pred, represents the portion of Google spend that is causally explained by the spend on Facebook, TikTok, Instagram, and Snapchat.
+8. **Stage 1 (mediator)** — RandomForestRegressor trained to predict `google_spend_log` from social channels. Save prediction as `google_spend_pred`.
 
-Stage 2 then models revenue using google_spend_pred instead of the actual google_spend. This isolates the indirect effect of social channels that flows through Google. The direct effects of other levers (email, price, etc.) are modeled alongside it.
+9. **Stage 2 (revenue)** — RandomForestRegressor trained to predict `revenue_log` using `google_spend_pred`, levers (emails, sms, price), controls (promotions dummies), and scaled features.
 
-Leakage and Confounding:
+10. **Diagnostics & plots** — feature importances, predicted vs actual scatter, partial dependence plots for top features, and printed RMSE/R².
 
-This structure helps prevent leakage from the mediating variable (Google spend). If we had included both facebook_spend and google_spend in a single model, the model would struggle to separate their correlated effects.
+---
 
-A potential unaddressed back-door path could be an unobserved confounding variable, such as a major competitor's campaign, which could simultaneously cause our brand to increase social/Google spend and also lead to lower revenue.
+## Reproducibility & recommended improvements
 
-4. Diagnostics
-Out-of-Sample Performance:
+### Data preparation (addressing your write-up point 1)
 
-Stage 1 (Predicting Google Spend):
+* **Weekly seasonality & trend**: derive `week_number` and optionally include `sin/cos` transforms of weekly cycle or include `month`/`quarter` dummies to model seasonal patterns. To isolate trend, add a rolling mean or explicit `trend = week_number` variable.
+* **Zero-spend periods**: use `log1p()` to keep zero spends in the model. Consider a two-part model (classification for spend > 0 and regression conditional on spend) if zeros are frequent and structurally different.
+* **Feature scaling & transforms**: continuous skewed variables use `log1p`; growth rates are clipped and standardized. Keep track of scalers so production transforms are identical.
 
-Test RMSE: 0.70
+### Modeling approach (write-up point 2)
 
-Test R²: 0.82
+* **Why Random Forest?** Nonlinear, robust to monotonic transformations, handles interactions, and provides interpretable feature importances and partial dependence plots. Good baseline for heterogeneous weekly data.
+* **Hyperparameters**: the notebook uses conservative trees (`max_depth`, `min_samples_leaf`) to avoid overfitting. Example choices:
 
-This indicates a strong fit. The model can explain 82% of the variance in Google spend based on other social media spends.
+  * Stage 1: `n_estimators=200`, `max_depth=5`, `random_state=42` — simpler mediator model.
+  * Stage 2: `n_estimators=300`, `max_depth=6`, `max_features='sqrt'`, `min_samples_split=5`, `min_samples_leaf=3` — stronger regularization.
+* **Regularization / feature selection**: avoid very deep trees and use `min_samples_leaf`. Evaluate dropping low-importance features or use permutation importance to validate.
+* **Validation plan**: time-aware split used in notebook (first 80% train, last 20% test). Prefer blocked/rolling cross-validation for time series (see Diagnostics).
 
-Stage 2 (Predicting Revenue):
+### Causal framing & mediator assumption (point 3)
 
-Test RMSE: 0.12
+* The two-stage approach treats `google_spend` as **partially mediated** by social activity. Stage 1 predicts `google_spend` from social channels and stage 2 uses the predicted `google_spend_pred` as a mediator.
+* **Assumptions**: no unobserved confounders that simultaneously affect social spend and revenue (back-door paths). If users/promotions or seasonality drive both social and revenue, include those controls (promotions dummies, seasonality features) to block confounding paths.
+* **Leakage**: avoid including future-looking variables (e.g., revenue lags beyond what would be available at prediction time). Ensure predictions are created using only information available up to the prediction week.
 
-Test R²: 0.74
+### Diagnostics (point 4)
 
-The final revenue model explains 74% of the variance in out-of-sample weekly revenue, which is a robust result.
+* **Out-of-sample performance**: report RMSE and R² on holdout. For time series, use blocked CV or expanding-window CV to avoid leakage.
+* **Stability checks**: run rolling-window retraining and check changes in feature importances across windows. Also run model on subsets (e.g., high vs low promotions) to test stability.
+* **Residual analysis**: plot residuals vs. fitted, residuals over time, ACF of residuals to detect autocorrelation. If residuals are autocorrelated, consider adding lag features or using time-series specific models.
+* **Sensitivity checks**: vary average price and promotions and evaluate predicted revenue changes. Use Partial Dependence and SHAP (recommended) for local/feature-level explanations.
 
-Stability Checks:
+### Insights & recommendations (point 5)
 
-The current model uses a single train-test split. For a more rigorous assessment of stability, a rolling cross-validation or blocked cross-validation approach would be a valuable next step. This would involve training and testing the model on multiple sequential windows of data to ensure its performance is consistent over time.
+* Use feature importances + partial dependence plots to identify which levers move `revenue_log` the most. Interpret with caution because Random Forests show associations — the two-stage causal framing helps isolate mediation by google spend.
+* Watch out for **collinearity** (e.g., social spends highly correlated with each other) — the mediator stage helps but also consider decorrelation techniques (PCA) or hierarchical models.
+* Operational recommendations:
 
-Residual Analysis (Next Step):
+  * Test media reallocation experiments (A/B or geo experiments) where possible to validate causal claims.
+  * If price has a strong negative partial dependence, incorporate price elasticity analysis and simulate revenue under alternative pricing.
 
-The script does not currently include residual analysis. A recommended next step is to plot the residuals (predicted - actual) over time. This would help diagnose if the model has any systematic biases, such as failing to capture seasonality or a changing trend.
+---
 
-Sensitivity to Price and Promotions:
+## How to extend
 
-The Partial Dependence Plots (PDPs) provide excellent insight into model sensitivity.
+* Replace Random Forests with gradient boosting (XGBoost, LightGBM) for potential predictive gains.
+* Add SHAP analysis for stronger local explanations.
+* Build a proper cross-validation loop (TimeSeriesSplit or blocked CV) and hyperparameter tuning with `GridSearchCV` or `RandomizedSearchCV` with `cv=TimeSeriesSplit(...)`.
+* Add a small experiment design plan (holdouts or geo experiments) to validate causal statements.
 
-The PDP for average_price_scaled shows a clear, strong positive relationship: as the scaled average price increases, so does log-revenue. This suggests the model has learned a strong price elasticity effect.
+---
 
-The PDPs for promotions would show the average change in revenue when a specific promotion is active, holding all other features constant.
+## Contact
 
-5. Insights & Recommendations
-Interpretation of Revenue Drivers:
+If you want me to:
 
-Based on the Stage 2 feature importances, the primary drivers of revenue are:
+* convert this into a runnable Python script with CLI flags,
+* add SHAP plots and save all figures to `outputs/`, or
+* prepare a 1-page slide summarizing results — tell me which one and I will add it.
 
-Average Price (average_price_scaled): This is the single most important feature. Pricing strategy has a direct and powerful impact on weekly revenue.
+---
 
-Emails Sent (emails_send_k): Email marketing is a highly effective channel.
-
-Mediated Google Spend (google_spend_pred): The portion of Google spend driven by social media activity is a significant contributor to revenue. This validates the hypothesis that social channels create demand that is later captured by search.
-
-SMS Sent (sms_send_k): SMS is another effective direct marketing channel.
-
-Promotions: Specific promotions, such as "Promotion 2," also show notable importance, indicating their effectiveness in driving short-term revenue lifts.
-
-Risks and Considerations:
-
-Collinearity: While the two-stage approach mitigates the collinearity between Google and social spend, other features might still be correlated. For example, emails_send_k and sms_send_k may be highly correlated if campaigns are often launched simultaneously. This can make it difficult to isolate their individual impacts perfectly.
-
-Mediated Effects: The key insight is that the value of social media is not just its direct impact but also its indirect impact via search. A recommendation would be to coordinate social and search marketing strategies. When planning a large social campaign, the search team should be prepared for an increase in branded search volume. Cutting social media spend may lead to an unforeseen drop in search-driven revenue.
-
-Model Limitations: A Random Forest model provides feature importance but not simple, linear coefficients like a regression model. The PDPs are essential for understanding the direction and magnitude of each feature's effect.
+*Generated for the provided MMM Random Forest pipeline. Replace placeholders (paths, dataset) with your project-specific files.*
